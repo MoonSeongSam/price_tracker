@@ -1,0 +1,37 @@
+name: deploy-worker
+
+on:
+  push:
+    paths: ["worker/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: price-track   # 기록 저장이 가격 추적 실행과 겹치지 않게
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cloudflare에 올리기
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GH_DISPATCH_TOKEN: ${{ secrets.GH_DISPATCH_TOKEN }}
+          QUEUE_KEY: ${{ secrets.QUEUE_KEY }}
+          TG_SECRET: ${{ secrets.TG_SECRET }}
+        run: python3 worker/deploy.py
+      - name: 주소 저장
+        run: |
+          git config user.name "price-bot"
+          git config user.email "price-bot@users.noreply.github.com"
+          git add state/worker_url.txt
+          git diff --cached --quiet || git commit -m "버튼 메뉴 주소 저장"
+          for i in 1 2 3; do git pull --rebase -q && git push -q && break; sleep 3; done

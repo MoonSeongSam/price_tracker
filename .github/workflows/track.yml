@@ -24,7 +24,9 @@ jobs:
           CONFIG_JSON: ${{ secrets.CONFIG_JSON }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python3 tracker.py
+          QUEUE_KEY: ${{ secrets.QUEUE_KEY }}
+        # 버튼 메뉴가 깨운 실행(workflow_dispatch)은 요청만 빨리 처리
+        run: python3 tracker.py ${{ github.event_name == 'workflow_dispatch' && '--queue-only' || '' }}
 
       - name: 기록 저장
         run: |
@@ -32,4 +34,4 @@ jobs:
           git config user.email "price-bot@users.noreply.github.com"
           git add state data
           git diff --cached --quiet || git commit -m "가격 기록 $(TZ=Asia/Seoul date '+%m-%d %H:%M')"
-          git push
+          for i in 1 2 3; do git pull --rebase -q && git push -q && break; sleep 3; done

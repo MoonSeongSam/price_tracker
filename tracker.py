@@ -180,9 +180,44 @@ def extra_brands():
     return load_json(STATE / "brands.json", [])
 
 
+def worker_url():
+    try:
+        return (STATE / "worker_url.txt").read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return ""
+
+
+def handle_queue(cfg):
+    """버튼 메뉴(Cloudflare)가 쌓아 둔 요청을 가져와 처리."""
+    url, key = worker_url(), os.environ.get("QUEUE_KEY", "")
+    if not url or not key or DRY:
+        return False
+    req = urllib.request.Request(url + "/queue", headers={"X-Key": key, "User-Agent": "price-bot"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        queue = json.loads(r.read().decode())
+    brands = shopping.all_brands(cfg, extra_brands())
+    for cmd in queue:
+        try:
+            a = cmd.get("action")
+            if a == "add":
+                add_watch(dict(cmd["watch"]), cfg, brands)
+            elif a == "stop":
+                stop_watch(int(cmd["id"]))
+            elif a == "search":
+                reply_search(cmd["q"], cfg)
+            elif a == "add_brand":
+                add_brand(cmd["name"], brands)
+                brands = shopping.all_brands(cfg, extra_brands())
+        except Exception as e:
+            send(f"⚠️ 요청 처리 중 오류: {html.escape(type(e).__name__)}")
+    return True
+
+
 def handle_commands(cfg):
     if DRY or not TOKEN:
         return
+    if handle_queue(cfg):
+        return  # 버튼 메뉴를 쓰면 텔레그램 메시지는 Cloudflare가 받음
     off_path = STATE / "telegram_offset.json"
     offset = load_json(off_path, {"offset": 0})["offset"]
     res = tg("getUpdates", offset=offset, timeout=0)
@@ -257,9 +292,17 @@ def dispatch(text, cfg):
 
 def watch_name(w):
     if w["kind"] == "brand":
-        s = f"{w['brand']} 전체 (세일 {w.get('min_discount', 20)}% 이상)"
+        names = w.get("brands") or [w.get("brand")]
+        disc = w.get("min_discount", 0)
+        s = f"쇼핑 {', '.join(names)} · {'/'.join(w.get('cats') or [])} · " + \
+            (f"세일 {disc}%↑·후기 좋은 것" if disc else "세일·후기 좋은 것")
     else:
-        s = w["query"]
+        cond = {"n": " · 새 상품만", "u": " · 중고만"}.get(w.get("cond", "a"), "")
+        s = w["query"] + cond
+        if w.get("exclude"):
+            s += " · 제외 " + ",".join(w["exclude"])
+        if w.get("include"):
+            s += " · 포함 " + ",".join(w["include"])
     if w.get("max_price"):
         s += f" · {w['max_price']:,}원 이하"
     return s
@@ -269,6 +312,7 @@ def add_watch(w, cfg, brands):
     st = watches_load()
     w["id"] = st["next_id"]
     w["created"] = shopping.now_iso()
+    w["title"] = watch_name(w)
     st["next_id"] += 1
     st["list"].append(w)
     save_json(STATE / "watches.json", st)
@@ -282,8 +326,8 @@ def add_watch(w, cfg, brands):
         save_json(STATE / "watch_seen.json", seen)
         save_json(STATE / "stock_cache.json", cache)
     lines = [f"▶️ <b>추적 시작 #{w['id']}</b> {html.escape(watch_name(w))}",
-             f"지금 조건에 맞는 {len(final)}건 (싼 순 10개). 앞으로는 새로 뜨거나 가격이 내리면 알림"]
-    lines += fmt_hits(final[:10]) or ["  아직 없음"]
+             f"지금 조건에 맞는 {len(final)}건. 앞으로는 새로 뜨거나 가격이 내리면 알림"]
+    lines += fmt_sections(w, final) or ["  아직 없음"]
     if errors:
         lines.append("⚠️ 조회 실패: " + ", ".join(errors))
     send("\n".join(lines),
@@ -348,6 +392,22 @@ def add_brand(text, brands):
          f"사이즈는 기본값(상의 XL·하의 31·32·M·L)으로 봅니다. 다르면 말씀해 주세요.")
 
 
+def fmt_sections(w, ps, n=10):
+    """쇼핑은 편집샵(세일·후기 좋음)과 중고를 나눠서, 나머지는 싼 순으로."""
+    if w.get("kind") != "brand":
+        return fmt_hits(ps[:n])
+    shop = [p for p in ps if p.get("shop")]
+    used = [p for p in ps if not p.get("shop")]
+    # 편집샵은 할인 큰 순(같으면 싼 순), 중고는 싼 순
+    shop.sort(key=lambda p: (-p.get("discount", 0), p["price"]))
+    out = []
+    if shop:
+        out += ["<b>🏬 편집샵 (세일·후기 좋은 것)</b>"] + fmt_hits(shop[:7])
+    if used:
+        out += ["<b>♻️ 중고 (내 사이즈)</b>"] + fmt_hits(used[:7])
+    return out
+
+
 def fmt_hits(ps):
     """편집샵 상품 앞 3개에만 '비슷한 체형 후기'를 붙임 (후기 조회 호출 줄이기)."""
     out, n = [], 0
@@ -361,6 +421,8 @@ def fmt_hits(ps):
 def fmt_watch(p, with_fit=False):
     title = html.escape(p["title"][:45])
     bits = [p["site"]]
+    if p.get("why"):
+        bits.insert(0, p["why"])
     if p.get("where"):
         bits.append(html.escape(p["where"]))
     if p.get("discount"):
@@ -493,7 +555,7 @@ def track_watches(cfg):
             for p in final:
                 ws[p["key"]] = {"price": p["price"], "at": shopping.now_iso()}
             lines = [f"🔔 <b>#{w['id']} {html.escape(watch_name(w))}</b> 새 매물 {len(final)}건"]
-            lines += fmt_hits(final[:10])
+            lines += fmt_sections(w, final)
             send("\n".join(lines))
         seen[str(w["id"])] = ws
     # 6시간 넘은 재고 기록은 정리
@@ -521,9 +583,23 @@ def notify_errors(errors):
     save_json(path, st)
 
 
+def write_menu_data(cfg):
+    brands = shopping.all_brands(cfg, extra_brands())
+    save_json(STATE / "menu_data.json", {
+        "brands": [{"name": b["name"], "tier": b.get("tier", 2)} for b in brands],
+        "fixed": [i["name"] for i in cfg.get("items", [])],
+    })
+
+
 def main():
     cfg = load_config()
     STATE.mkdir(exist_ok=True)
+    if "--queue-only" in sys.argv:  # 버튼으로 깨운 실행: 요청만 빨리 처리
+        try:
+            handle_commands(cfg)
+        finally:
+            write_menu_data(cfg)
+        return
     try:
         handle_commands(cfg)
     except Exception as e:
@@ -536,6 +612,7 @@ def main():
     if errors:
         print("조회 실패:", sorted(set(errors)))
     notify_errors(sorted(set(errors)))
+    write_menu_data(cfg)
 
 
 if __name__ == "__main__":
