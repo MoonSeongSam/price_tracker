@@ -101,3 +101,163 @@ def danawa(query):
             "time": "",
         })
     return out
+
+
+# ---------- 편집샵 (새 상품) ----------
+BODY = dict(h=(177, 185), w=(76, 86))  # 후기에서 '비슷한 체형'으로 볼 범위
+
+
+def _post_json(url, body):
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
+                                 headers={"User-Agent": UA, "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.loads(r.read().decode())
+
+
+def musinsa(keyword, sort="POPULAR", pages=1):
+    """무신사 남성 상품 검색. sort: POPULAR / NEW / DISCOUNT_RATE"""
+    q = urllib.parse.quote(keyword)
+    out = []
+    for page in range(1, pages + 1):
+        url = (f"https://api.musinsa.com/api2/dp/v1/plp/goods?keyword={q}&gf=M"
+               f"&sortCode={sort}&page={page}&size=60&caller=SEARCH")
+        for g in json.loads(_get(url))["data"]["list"]:
+            if g.get("isSoldOut") or g.get("isAd"):
+                continue
+            out.append({
+                "site": "무신사",
+                "id": f"ms_{g['goodsNo']}",
+                "no": g["goodsNo"],
+                "brand": g.get("brand", ""),
+                "brand_name": g.get("brandName", ""),
+                "title": f"{g.get('brandName', '')} {g.get('goodsName', '')}",
+                "content": "",
+                "price": int(g.get("finalPrice") or g.get("price") or 0),
+                "normal": int(g.get("normalPrice") or 0),
+                "discount": int(g.get("finalDiscount") or g.get("saleRate") or 0),
+                "url": g.get("goodsLinkUrl") or f"https://www.musinsa.com/products/{g['goodsNo']}",
+                "where": "",
+                "time": "",
+            })
+    return out
+
+
+def c29(keyword, pages=1):
+    """29CM 상품 검색."""
+    q = urllib.parse.quote(keyword)
+    out = []
+    for page in range(1, pages + 1):
+        url = f"https://search-api.29cm.co.kr/api/v4/products/search?keyword={q}&page={page}&size=50"
+        for g in json.loads(_get(url))["data"]["products"]:
+            if g.get("isSoldOut"):
+                continue
+            out.append({
+                "site": "29CM",
+                "id": f"c29_{g['itemNo']}",
+                "no": g["itemNo"],
+                "brand": (g.get("frontBrandNameEng") or "").lower(),
+                "brand_name": g.get("frontBrandNameKor", ""),
+                "title": f"{g.get('frontBrandNameKor', '')} {g.get('itemName', '')}",
+                "content": "",
+                "price": int(g.get("lastSalePrice") or g.get("consumerPrice") or 0),
+                "normal": int(g.get("consumerPrice") or 0),
+                "discount": int(g.get("lastSalePercent") or 0),
+                "url": f"https://product.29cm.co.kr/catalog/{g['itemNo']}",
+                "where": "",
+                "time": "",
+            })
+    return out
+
+
+def musinsa_stock(goods_no, want):
+    """무신사: want(사이즈 이름)이 True인 사이즈 중 재고 있는 것."""
+    data = json.loads(_get(f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/options"))["data"]
+    found = []
+    for item in data.get("optionItems") or []:
+        if item.get("isDeleted") or not item.get("activated", True):
+            continue
+        vals = item.get("optionValues") or []
+        size = next((v["name"] for v in vals if re.search(r"size|사이즈", v.get("optionName", ""), re.I)),
+                    vals[-1]["name"] if vals else "")
+        if not size or size in found or not want(size):
+            continue
+        inv = _post_json(f"https://goods-detail.musinsa.com/api2/goods/{goods_no}/options/v2/prioritized-inventories",
+                         {"optionValueNos": item["optionValueNos"]})
+        if any(not x.get("outOfStock") for x in inv.get("data") or []):
+            found.append(size)
+    return found
+
+
+def c29_stock(item_no, want):
+    """29CM: want가 True인 사이즈 중 재고 있는 것 (색상·사이즈 겹옵션도 처리)."""
+    d = json.loads(_get(f"https://cache.29cm.co.kr/item/detail/{item_no}/"))
+    found = []
+
+    def walk(lst):
+        for x in lst or []:
+            if x.get("list"):
+                walk(x["list"])
+                continue
+            size = (x.get("title") or "").strip()
+            ok = x.get("option_stock_status") == 1 and not (
+                x.get("is_limited_qty") == "T" and (x.get("limited_qty") or 0) <= 0)
+            if size and ok and want(size) and size not in found:
+                found.append(size)
+
+    opts = d.get("option_items") or {}
+    if not opts.get("list") and d.get("use_option") in ("F", False):
+        return ["FREE"] if want("FREE") else []
+    walk(opts.get("list"))
+    return found
+
+
+def _similar(h, w):
+    return BODY["h"][0] <= h <= BODY["h"][1] and BODY["w"][0] <= w <= BODY["w"][1]
+
+
+def musinsa_fit(goods_no, pages=3):
+    """이 상품 후기 중 비슷한 체형(177~185cm·76~86kg 남성)이 고른 사이즈 개수."""
+    from collections import Counter
+    c = Counter()
+    for page in range(pages):
+        url = (f"https://goods.musinsa.com/api2/review/v1/view/list?page={page}&pageSize=20"
+               f"&goodsNo={goods_no}&sort=up_cnt_desc&myFilter=false&hasPhoto=false&isExperience=false")
+        rows = json.loads(_get(url))["data"]["list"]
+        if not rows:
+            break
+        for r in rows:
+            u = r.get("userProfileInfo") or {}
+            if u.get("reviewSex") == "남성" and _similar(u.get("userHeight") or 0, u.get("userWeight") or 0):
+                c[(r.get("goodsOption") or "").split("·")[-1].split("/")[-1].strip()] += 1
+    return c
+
+
+def c29_fit(item_no, pages=3):
+    from collections import Counter
+    c = Counter()
+    for page in range(pages):
+        rows = json.loads(_get(f"https://review-api.29cm.co.kr/api/v4/reviews?itemId={item_no}&page={page}&size=20"))["data"]["results"]
+        if not rows:
+            break
+        for r in rows:
+            try:
+                h = int(r["userSize"][0].replace("cm", ""))
+                w = int(r["userSize"][1].replace("kg", ""))
+            except Exception:
+                continue
+            if _similar(h, w):
+                m = re.search(r"\]\s*([^\s\[]+)\s*$", " ".join(r.get("optionValue") or []))
+                c[m.group(1) if m else ""] += 1
+    return c
+
+
+BJ_CONDITION = {"NEW": "새상품", "LIKE_NEW": "거의 새것", "LIGHTLY_USED": "사용감 적음",
+                "USED": "사용감 있음", "HEAVILY_USED": "사용감 많음"}
+
+
+def bunjang_detail(pid):
+    """번장 상세: (본문 + 사이즈 옵션 글자, 상태)."""
+    p = json.loads(_get(f"https://api.bunjang.co.kr/api/pms/v3/products-detail/{pid}?viewerUid=-1"))["data"]["product"]
+    sizes = " ".join(f"사이즈 {o.get('optionValue', '')}" for o in p.get("options") or []
+                     if "사이즈" in (o.get("optionGroupName") or ""))
+    return (p.get("description") or "") + " " + sizes, BJ_CONDITION.get(p.get("condition"), "")

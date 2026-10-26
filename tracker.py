@@ -20,6 +20,9 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import re
+
+import shopping
 import sources
 
 ROOT = Path(__file__).parent
@@ -71,7 +74,7 @@ def tg(method, **params):
         return json.loads(r.read().decode())
 
 
-def send(text):
+def send(text, markup=None):
     if DRY:
         print("----- [텔레그램 메시지] -----\n" + text + "\n")
         return
@@ -85,10 +88,11 @@ def send(text):
             cur = ""
         cur += line + "\n"
     chunks.append(cur)
-    for c in chunks:
-        if c.strip():
-            tg("sendMessage", chat_id=CHAT_ID, text=c, parse_mode="HTML",
-               disable_web_page_preview="true")
+    chunks = [c for c in chunks if c.strip()]
+    for i, c in enumerate(chunks):
+        extra = {"reply_markup": json.dumps(markup)} if (markup and i == len(chunks) - 1) else {}
+        tg("sendMessage", chat_id=CHAT_ID, text=c, parse_mode="HTML",
+           disable_web_page_preview="true", **extra)
 
 
 def fmt(p):
@@ -144,10 +148,36 @@ def is_bundle(p, item):
 
 
 # ---------- 1) 텔레그램 명령 처리 ----------
-HELP = ("사용법\n"
-        "• <b>검색 키워드</b> → 번장·당근·다나와 최저가 10개\n"
-        "• <b>목록</b> → 추적 중인 상품의 현재 최저가\n"
-        "답장은 1시간 이내에 옵니다.")
+HELP = ("<b>사용법</b> (답장은 1시간 안에 옵니다)\n"
+        "• <b>추적 쿠어 블레이저 15만</b> → 이 상품을 내 사이즈로 계속 찾아서 알림 (가격은 생략 가능)\n"
+        "• <b>쇼핑 쿠어</b> → 쿠어 전체: 내 사이즈 중고 새 매물 + 편집샵 20% 이상 세일\n"
+        "   <b>쇼핑 1순위</b> → 1순위 브랜드 전부 / <b>쇼핑 쿠어 30%</b>, <b>쇼핑 쿠어 10만</b>도 됨\n"
+        "• <b>목록</b> → 추적 중인 것 보기·중단 버튼\n"
+        "• <b>중단 3</b> → 3번 추적 끝내기\n"
+        "• <b>검색 에어팟 프로</b> → 한 번만 최저가 검색\n"
+        "• <b>브랜드</b> → 등록된 브랜드 / <b>브랜드추가 아워레가시 2순위</b>\n"
+        "• <b>가격</b> → 닌텐도 스위치 2 현재 최저가")
+KEYBOARD = {"keyboard": [[{"text": "목록"}, {"text": "브랜드"}, {"text": "도움말"}]],
+            "resize_keyboard": True, "is_persistent": True}
+
+
+def parse_price(text):
+    """'15만', '15만원', '150000원' → 150000. 없으면 None."""
+    m = re.search(r"(\d+(?:\.\d+)?)\s*만\s*원?", text)
+    if m:
+        return int(float(m.group(1)) * 10000), text.replace(m.group(0), " ")
+    m = re.search(r"(?<!\d)(\d{4,})\s*원?(?!\d)", text)
+    if m:
+        return int(m.group(1)), text.replace(m.group(0), " ")
+    return None, text
+
+
+def watches_load():
+    return load_json(STATE / "watches.json", {"next_id": 1, "list": []})
+
+
+def extra_brands():
+    return load_json(STATE / "brands.json", [])
 
 
 def handle_commands(cfg):
@@ -158,20 +188,193 @@ def handle_commands(cfg):
     res = tg("getUpdates", offset=offset, timeout=0)
     for u in res.get("result", []):
         offset = u["update_id"] + 1
-        msg = u.get("message") or {}
+        save_json(off_path, {"offset": offset})  # 먼저 저장: 중간에 죽어도 같은 명령을 반복하지 않게
+        cb = u.get("callback_query")
+        msg = (cb or {}).get("message") or u.get("message") or {}
         if str((msg.get("chat") or {}).get("id")) != str(CHAT_ID):
             continue  # 내 채팅방 말고는 무시
-        text = (msg.get("text") or "").strip()
-        if text.startswith("검색"):
-            q = text[2:].strip()
-            if q:
-                reply_search(q, cfg)
-        elif text.startswith("목록"):
-            for item in cfg["items"]:
-                reply_item(item, cfg)
+        try:
+            if cb:
+                try:
+                    tg("answerCallbackQuery", callback_query_id=cb["id"])
+                except Exception:
+                    pass  # 1시간 지난 버튼은 응답 기한이 지나 실패할 수 있음
+                if (cb.get("data") or "").startswith("stop:"):
+                    stop_watch(int(cb["data"][5:]))
+                continue
+            dispatch((msg.get("text") or "").strip(), cfg)
+        except Exception as e:
+            send(f"⚠️ 명령 처리 중 오류: {html.escape(type(e).__name__)}")
+
+
+def dispatch(text, cfg):
+    brands = shopping.all_brands(cfg, extra_brands())
+    if text.startswith("검색"):
+        if text[2:].strip():
+            reply_search(text[2:].strip(), cfg)
+    elif text.startswith("추적"):
+        price, rest = parse_price(text[2:])
+        q = rest.strip()
+        if q:
+            add_watch({"kind": "item", "query": q, "max_price": price}, cfg, brands)
+    elif text.startswith("쇼핑"):
+        price, rest = parse_price(text[2:])
+        m = re.search(r"(\d+)\s*%", rest)
+        disc = int(m.group(1)) if m else 20
+        rest = re.sub(r"\d+\s*%", " ", rest).strip()
+        t = re.match(r"([123])\s*순위", rest)
+        if t:
+            targets = [b for b in brands if b.get("tier") == int(t.group(1))]
         else:
-            send(HELP)
-    save_json(off_path, {"offset": offset})
+            targets = [b for b in [shopping.find_brand(brands, rest)] if b]
+        if not targets:
+            send(f"'{html.escape(rest)}' 브랜드를 못 찾았습니다. <b>브랜드</b>로 목록을 보거나 "
+                 f"<b>브랜드추가 {html.escape(rest)}</b>로 등록해 주세요.")
+        for b in targets:
+            add_watch({"kind": "brand", "query": b["name"], "brand": b["name"],
+                       "max_price": price, "min_discount": disc}, cfg, brands)
+    elif text.startswith("목록"):
+        show_list(cfg)
+    elif text.startswith("중단"):
+        m = re.search(r"\d+", text)
+        if m:
+            stop_watch(int(m.group()))
+    elif text.startswith("브랜드추가") or text.startswith("브랜드 추가"):
+        add_brand(re.sub(r"^브랜드\s*추가", "", text).strip(), brands)
+    elif text.startswith("브랜드"):
+        lines = ["<b>등록된 브랜드</b>"]
+        for tier in (1, 2, 3):
+            names = [b["name"] for b in brands if b.get("tier") == tier]
+            if names:
+                lines.append(f"{tier}순위: " + ", ".join(names))
+        send("\n".join(lines))
+    elif text.startswith("가격"):
+        for item in cfg["items"]:
+            reply_item(item, cfg)
+    else:
+        send(HELP, markup=KEYBOARD)
+
+
+def watch_name(w):
+    if w["kind"] == "brand":
+        s = f"{w['brand']} 전체 (세일 {w.get('min_discount', 20)}% 이상)"
+    else:
+        s = w["query"]
+    if w.get("max_price"):
+        s += f" · {w['max_price']:,}원 이하"
+    return s
+
+
+def add_watch(w, cfg, brands):
+    st = watches_load()
+    w["id"] = st["next_id"]
+    w["created"] = shopping.now_iso()
+    st["next_id"] += 1
+    st["list"].append(w)
+    save_json(STATE / "watches.json", st)
+    # 시작하자마자 지금 있는 매물을 보여주고, 그건 '이미 알림'으로 표시
+    seen = load_json(STATE / "watch_seen.json", {})
+    cache = load_json(STATE / "stock_cache.json", {})
+    hits, errors = shopping.run_watch(w, cfg, brands, cache)
+    final = shopping.finalize(hits, cache, {}, fresh_only=False)
+    seen[str(w["id"])] = {p["key"]: {"price": p["price"], "at": shopping.now_iso()} for p in final}
+    if TOKEN or DRY:
+        save_json(STATE / "watch_seen.json", seen)
+        save_json(STATE / "stock_cache.json", cache)
+    lines = [f"▶️ <b>추적 시작 #{w['id']}</b> {html.escape(watch_name(w))}",
+             f"지금 조건에 맞는 {len(final)}건 (싼 순 10개). 앞으로는 새로 뜨거나 가격이 내리면 알림"]
+    lines += fmt_hits(final[:10]) or ["  아직 없음"]
+    if errors:
+        lines.append("⚠️ 조회 실패: " + ", ".join(errors))
+    send("\n".join(lines),
+         markup={"inline_keyboard": [[{"text": f"#{w['id']} 중단", "callback_data": f"stop:{w['id']}"}]]})
+
+
+def stop_watch(wid):
+    st = watches_load()
+    before = len(st["list"])
+    st["list"] = [w for w in st["list"] if w["id"] != wid]
+    save_json(STATE / "watches.json", st)
+    seen = load_json(STATE / "watch_seen.json", {})
+    seen.pop(str(wid), None)
+    save_json(STATE / "watch_seen.json", seen)
+    send(f"⏹ #{wid} 추적 중단" if len(st["list"]) < before else f"#{wid} 추적은 이미 없습니다")
+
+
+def show_list(cfg):
+    st = watches_load()
+    lines = ["<b>추적 중</b>"]
+    for item in cfg["items"]:
+        lines.append(f"• {html.escape(item['name'])} (기본, 본체 {item['max_body']:,}원 이하)")
+    buttons = []
+    for w in st["list"]:
+        lines.append(f"• #{w['id']} {html.escape(watch_name(w))}")
+        buttons.append([{"text": f"#{w['id']} 중단", "callback_data": f"stop:{w['id']}"}])
+    if not st["list"]:
+        lines.append("텔레그램으로 추가한 추적은 없습니다. '도움말'을 눌러 보세요.")
+    send("\n".join(lines), markup={"inline_keyboard": buttons} if buttons else None)
+
+
+def add_brand(text, brands):
+    m = re.search(r"([123])\s*순위", text)
+    tier = int(m.group(1)) if m else 2
+    name = re.sub(r"[123]\s*순위", "", text).strip()
+    if not name:
+        return
+    if shopping.find_brand(brands, name):
+        send(f"{html.escape(name)}은(는) 이미 등록돼 있습니다.")
+        return
+    b = {"name": name, "aliases": [], "tier": tier}
+    key = name.replace(" ", "")
+    try:
+        from collections import Counter
+        ms = Counter(p["brand"] for p in sources.musinsa(name)
+                     if p["brand_name"].replace(" ", "") == key)
+        if ms:
+            b["musinsa"] = ms.most_common(1)[0][0]
+            b["aliases"].append(b["musinsa"])
+        cm = Counter(p["brand"] for p in sources.c29(name)
+                     if p["brand_name"].replace(" ", "") == key)
+        if cm:
+            b["c29"] = b["eng"] = cm.most_common(1)[0][0]
+            b["aliases"].append(b["c29"])
+    except Exception:
+        pass
+    extra = extra_brands()
+    extra.append(b)
+    save_json(STATE / "brands.json", extra)
+    shops = [s for s, k in (("무신사", "musinsa"), ("29CM", "c29")) if b.get(k)]
+    send(f"✅ {html.escape(name)} {tier}순위로 등록 (편집샵: {', '.join(shops) or '못 찾음, 중고만'})\n"
+         f"사이즈는 기본값(상의 XL·하의 31·32·M·L)으로 봅니다. 다르면 말씀해 주세요.")
+
+
+def fmt_hits(ps):
+    """편집샵 상품 앞 3개에만 '비슷한 체형 후기'를 붙임 (후기 조회 호출 줄이기)."""
+    out, n = [], 0
+    for p in ps:
+        fit = bool(p.get("shop")) and n < 3
+        n += fit
+        out.append(fmt_watch(p, with_fit=fit))
+    return out
+
+
+def fmt_watch(p, with_fit=False):
+    title = html.escape(p["title"][:45])
+    bits = [p["site"]]
+    if p.get("where"):
+        bits.append(html.escape(p["where"]))
+    if p.get("discount"):
+        bits.append(f"{p['discount']}% 할인")
+    if p.get("size_note"):
+        bits.append(html.escape(p["size_note"]))
+    line = f'• <b>{p["price"]:,}원</b> {" · ".join(bits)}\n  <a href="{p["url"]}">{title}</a>'
+    if p.get("dropped"):
+        line += "  ⬇️가격 내림"
+    if with_fit and p.get("shop"):
+        ft = shopping.fit_text(p)
+        if ft:
+            line += f"\n  {html.escape(ft)}"
+    return line
 
 
 def reply_search(q, cfg):
@@ -222,6 +425,7 @@ def track(cfg):
         if new_file:
             w.writerow(["시각", "상품", "구분", "최저가", "매물수"])
 
+        all_errors = []
         for item in cfg["items"]:
             found, errors = collect(item["queries"], cfg["regions"])
             ok = [p for p in found if matches(p, item)]
@@ -262,12 +466,43 @@ def track(cfg):
                 for p in hits[:15]:
                     lines.append(fmt(p) + ("  ⬇️가격 내림" if p["dropped"] else ""))
                 send("\n".join(lines))
-            if errors:
-                print("조회 실패:", errors)
-                notify_errors(errors)
+            all_errors += errors
 
     if TOKEN or DRY:  # 텔레그램 연결 전 시험 실행은 '알린 매물'로 기록하지 않음
         save_json(STATE / "alerted.json", alerted)
+    return all_errors
+
+
+def track_watches(cfg):
+    """텔레그램으로 추가한 추적들: 새 매물·가격 내림만 알림."""
+    st = watches_load()
+    if not st["list"]:
+        return []
+    brands = shopping.all_brands(cfg, extra_brands())
+    seen = load_json(STATE / "watch_seen.json", {})
+    cache = load_json(STATE / "stock_cache.json", {})
+    cutoff = (datetime.now(KST) - timedelta(days=30)).isoformat()
+    all_errors = []
+    for w in st["list"]:
+        ws = {k: v for k, v in seen.get(str(w["id"]), {}).items() if v["at"] >= cutoff}
+        hits, errors = shopping.run_watch(w, cfg, brands, cache)
+        all_errors += errors
+        final = shopping.finalize(hits, cache, ws, fresh_only=True)
+        print(f"추적 #{w['id']}: 후보 {len(hits)}, 새 알림 {len(final)}")
+        if final:
+            for p in final:
+                ws[p["key"]] = {"price": p["price"], "at": shopping.now_iso()}
+            lines = [f"🔔 <b>#{w['id']} {html.escape(watch_name(w))}</b> 새 매물 {len(final)}건"]
+            lines += fmt_hits(final[:10])
+            send("\n".join(lines))
+        seen[str(w["id"])] = ws
+    # 6시간 넘은 재고 기록은 정리
+    now = time.time()
+    cache = {k: v for k, v in cache.items() if now - v["at"] < 6 * 3600}
+    if TOKEN or DRY:
+        save_json(STATE / "watch_seen.json", seen)
+        save_json(STATE / "stock_cache.json", cache)
+    return all_errors
 
 
 def notify_errors(errors):
@@ -292,8 +527,15 @@ def main():
     try:
         handle_commands(cfg)
     except Exception as e:
-        print("텔레그램 명령 처리 실패:", e)
-    track(cfg)
+        print("텔레그램 명령 처리 실패:", type(e).__name__)
+    errors = track(cfg)
+    try:
+        errors += track_watches(cfg)
+    except Exception as e:
+        print("추적 처리 실패:", type(e).__name__)
+    if errors:
+        print("조회 실패:", sorted(set(errors)))
+    notify_errors(sorted(set(errors)))
 
 
 if __name__ == "__main__":
