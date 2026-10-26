@@ -9,6 +9,7 @@ GitHub Actions(deploy-worker.yml)에서 실행. 필요한 환경변수:
 import json
 import os
 import secrets
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -89,9 +90,19 @@ def set_webhook(url):
         "allowed_updates": json.dumps(["message", "callback_query"]),
     }).encode()
     tok = os.environ["TELEGRAM_TOKEN"]
-    with urllib.request.urlopen(f"https://api.telegram.org/bot{tok}/setWebhook", data=params, timeout=30) as r:
-        res = json.loads(r.read().decode())
-    assert res.get("ok"), res
+    # 새 workers.dev 주소는 퍼지는 데 몇 분 걸릴 수 있어 기다렸다가 다시 시도
+    for attempt in range(12):
+        try:
+            with urllib.request.urlopen(f"https://api.telegram.org/bot{tok}/setWebhook", data=params, timeout=30) as r:
+                res = json.loads(r.read().decode())
+            if res.get("ok"):
+                break
+        except urllib.error.HTTPError as e:
+            res = json.loads(e.read().decode() or "{}")
+        print(f"텔레그램 연결 재시도 {attempt + 1}/12: {res.get('description')}")
+        time.sleep(20)
+    else:
+        raise SystemExit("텔레그램 웹훅 연결 실패: " + str(res.get("description")))
     # 아래쪽 고정 버튼 '🛍 메뉴' 달아 주기
     body = urllib.parse.urlencode({
         "chat_id": os.environ["TELEGRAM_CHAT_ID"],
