@@ -99,7 +99,7 @@ def fmt(p):
 
 
 # ---------- 수집 ----------
-def collect(queries, regions, naver_keys, used=True, new=True):
+def collect(queries, regions, used=True, new=True):
     found, errors = {}, []
     for q in queries:
         jobs = []
@@ -108,7 +108,7 @@ def collect(queries, regions, naver_keys, used=True, new=True):
             for r in regions:
                 jobs.append((f"당근 {r['name']}", lambda q=q, r=r: sources.daangn(q, r["id"])))
         if new:
-            jobs.append(("네이버", lambda q=q: sources.naver_shop(q, *naver_keys)))
+            jobs.append(("다나와", lambda q=q: sources.danawa(q)))
         for name, job in jobs:
             try:
                 for p in job():
@@ -145,12 +145,12 @@ def is_bundle(p, item):
 
 # ---------- 1) 텔레그램 명령 처리 ----------
 HELP = ("사용법\n"
-        "• <b>검색 키워드</b> → 번장·당근·네이버쇼핑 최저가 10개\n"
+        "• <b>검색 키워드</b> → 번장·당근·다나와 최저가 10개\n"
         "• <b>목록</b> → 추적 중인 상품의 현재 최저가\n"
         "답장은 1시간 이내에 옵니다.")
 
 
-def handle_commands(cfg, keys):
+def handle_commands(cfg):
     if DRY or not TOKEN:
         return
     off_path = STATE / "telegram_offset.json"
@@ -165,17 +165,17 @@ def handle_commands(cfg, keys):
         if text.startswith("검색"):
             q = text[2:].strip()
             if q:
-                reply_search(q, cfg, keys)
+                reply_search(q, cfg)
         elif text.startswith("목록"):
             for item in cfg["items"]:
-                reply_item(item, cfg, keys)
+                reply_item(item, cfg)
         else:
             send(HELP)
     save_json(off_path, {"offset": offset})
 
 
-def reply_search(q, cfg, keys):
-    found, errors = collect([q], cfg["regions"], keys)
+def reply_search(q, cfg):
+    found, errors = collect([q], cfg["regions"])
     found = [p for p in found if p["price"] > 0
              and not any(w in text_of(p) for w in BASE_EXCLUDE)]
     if found:
@@ -190,8 +190,8 @@ def reply_search(q, cfg, keys):
     send("\n".join(lines))
 
 
-def reply_item(item, cfg, keys):
-    found, errors = collect(item["queries"], cfg["regions"], keys)
+def reply_item(item, cfg):
+    found, errors = collect(item["queries"], cfg["regions"])
     ok = [p for p in found if matches(p, item)]
     for p in ok:
         p["bundle"] = is_bundle(p, item)
@@ -207,7 +207,7 @@ def reply_item(item, cfg, keys):
 
 
 # ---------- 2) 정기 추적 ----------
-def track(cfg, keys):
+def track(cfg):
     alerted = load_json(STATE / "alerted.json", {})
     now = datetime.now(KST)
     # 30일 지난 기록은 정리
@@ -223,7 +223,7 @@ def track(cfg, keys):
             w.writerow(["시각", "상품", "구분", "최저가", "매물수"])
 
         for item in cfg["items"]:
-            found, errors = collect(item["queries"], cfg["regions"], keys)
+            found, errors = collect(item["queries"], cfg["regions"])
             ok = [p for p in found if matches(p, item)]
             for p in ok:
                 p["bundle"] = is_bundle(p, item)
@@ -288,13 +288,12 @@ def notify_errors(errors):
 
 def main():
     cfg = load_config()
-    keys = (os.environ.get("NAVER_CLIENT_ID", ""), os.environ.get("NAVER_CLIENT_SECRET", ""))
     STATE.mkdir(exist_ok=True)
     try:
-        handle_commands(cfg, keys)
+        handle_commands(cfg)
     except Exception as e:
         print("텔레그램 명령 처리 실패:", e)
-    track(cfg, keys)
+    track(cfg)
 
 
 if __name__ == "__main__":

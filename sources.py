@@ -65,25 +65,38 @@ def daangn(query, region_id):
     return out
 
 
-def naver_shop(query, client_id, client_secret, display=40):
-    """네이버 쇼핑 검색 API (새 상품, 무료 하루 25,000회). 키가 없으면 빈 목록."""
-    if not client_id or not client_secret:
-        return []
+def _unesc(s):
+    """다나와 데이터 속 유니코드 표기(역슬래시 u003c 등)를 원래 글자로."""
+    return re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), s)
+
+
+def danawa(query):
+    """다나와 가격비교 검색 (새 상품 최저가). 네이버 쇼핑 API는 2026-07-31 종료."""
     q = urllib.parse.quote(query)
-    url = (f"https://openapi.naver.com/v1/search/shop.json?query={q}"
-           f"&display={display}&sort=sim&exclude=used:rental:cbshop")
-    data = json.loads(_get(url, {"X-Naver-Client-Id": client_id,
-                                 "X-Naver-Client-Secret": client_secret}))
-    out = []
-    for it in data.get("items", []):
-        title = unescape(re.sub(r"<[^>]+>", "", it.get("title", "")))
+    t = _get(f"https://search.danawa.com/dsearch.php?query={q}").replace('\\"', '"')
+    marks = [m for m in re.finditer(r'"productSeq":"(\d+)"', t)]
+    out, seen = [], set()
+    for n, m in enumerate(marks):
+        end = marks[n + 1].start() if n + 1 < len(marks) else m.start() + 8000
+        seg = t[m.start():end]
+        name = re.search(r'"productName":"([^"]*)"', seg)
+        price = re.search(r'"minPriceNumber":(\d+)', seg)
+        if not name or not price or int(price.group(1)) == 0 or m.group(1) in seen:
+            continue
+        seen.add(m.group(1))
+        title = _unesc(name.group(1))
+        title = unescape(re.sub(r"<[^>]+>", "", title))
+        bundle = re.search(r'"bundleName":"([^"]*)"', seg)
+        if bundle and bundle.group(1):
+            b = _unesc(bundle.group(1))
+            title += f" ({unescape(re.sub(r'<[^>]+>', '', b))})"
         out.append({
-            "site": "새상품·" + (it.get("mallName") or "네이버"),
-            "id": f"nv_{it.get('productId')}",
+            "site": "새상품·다나와",
+            "id": f"dw_{m.group(1)}",
             "title": title,
             "content": "",
-            "price": int(it.get("lprice") or 0),
-            "url": it.get("link", ""),
+            "price": int(price.group(1)),
+            "url": f"https://prod.danawa.com/info/?pcode={m.group(1)}",
             "where": "",
             "time": "",
         })

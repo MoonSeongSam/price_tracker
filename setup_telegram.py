@@ -1,4 +1,4 @@
-"""텔레그램·네이버 키를 GitHub 비밀값으로 등록하는 1회용 설정 도구.
+"""텔레그램 키를 GitHub 비밀값으로 등록하는 1회용 설정 도구.
 
 사용법 (VS Code 터미널에서):
   1) 새 봇에게 텔레그램으로 아무 메시지나 하나 보냄
@@ -31,12 +31,6 @@ msg = "✅ 가격 추적 봇 연결 완료. '검색 키워드' 또는 '목록'�
 urllib.request.urlopen(f"https://api.telegram.org/bot{token}/sendMessage",
                        data=urllib.parse.urlencode({"chat_id": chat_id, "text": msg}).encode())
 
-nid = getpass.getpass("네이버 Client ID (없으면 그냥 Enter): ").strip()
-nsec = getpass.getpass("네이버 Client Secret (없으면 그냥 Enter): ").strip() if nid else ""
-
 secret("TELEGRAM_TOKEN", token)
 secret("TELEGRAM_CHAT_ID", chat_id)
-if nid and nsec:
-    secret("NAVER_CLIENT_ID", nid)
-    secret("NAVER_CLIENT_SECRET", nsec)
 print("완료. 텔레그램에 연결 메시지가 왔는지 확인해 주세요.")
