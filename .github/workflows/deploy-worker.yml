@@ -32,6 +32,7 @@ jobs:
         run: |
           git config user.name "price-bot"
           git config user.email "price-bot@users.noreply.github.com"
+          [ -f state/worker_url.txt ] || exit 0
           git add state/worker_url.txt
           git diff --cached --quiet || git commit -m "버튼 메뉴 주소 저장"
           for i in 1 2 3; do git pull --rebase -q && git push -q && break; sleep 3; done
