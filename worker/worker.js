@@ -120,7 +120,7 @@ async function handle(u, env) {
 async function mainMenu(env, chat, msgId) {
   await setConv(env, null);
   return show(env, chat, msgId, "무엇을 할까요?", [
-    [["👕 옷", "c"], ["📦 기타 물건", "e"]],
+    [["👕 옷", "c"], ["📦 기타 물건", "e0"]],
     [["📋 진행 중 목록 · 중단", "l"]],
   ]);
 }
@@ -137,7 +137,13 @@ async function onButton(env, chat, msgId, data) {
     return show(env, chat, msgId, "👕 옷", [
       [["🎯 트래킹 시작 (상품 하나)", "t"]],
       [["🛍 쇼핑 시작 (좋은 것 추천)", "h"]],
-      [["⏹ 중단", "l"], ["← 처음", "m"]],
+      [["⏹ 중단", "lc"], ["← 처음", "m"]],
+    ]);
+  }
+  if (data === "e0") {  // 기타 물건 메뉴
+    return show(env, chat, msgId, "📦 기타 물건", [
+      [["▶️ 추적 시작", "e"]],
+      [["⏹ 중단", "le"], ["← 처음", "m"]],
     ]);
   }
   if (data === "t" || data === "e") {
@@ -222,7 +228,9 @@ async function onButton(env, chat, msgId, data) {
     return confirm(env, chat, msgId, conv);
   }
   if (data === "go") return start(env, chat, msgId, conv);
-  if (data === "l") return listMenu(env, chat, msgId);
+  if (data === "l") return listMenu(env, chat, msgId, "all");
+  if (data === "lc") return listMenu(env, chat, msgId, "clothes");
+  if (data === "le") return listMenu(env, chat, msgId, "etc");
   if (data.startsWith("sf:")) {  // 기본 추적(스위치 등) 중단
     const menu = await repoJson(env, "state/menu_data.json", { fixed: [] });
     const name = (menu.fixed || [])[parseInt(data.slice(3), 10)];
@@ -358,21 +366,25 @@ async function start(env, chat, msgId, conv) {
   return show(env, chat, msgId, "⏳ 시작 요청했습니다. 1~2분 안에 지금 있는 것부터 보내 드립니다.", [[["← 처음", "m"]]]);
 }
 
-async function listMenu(env, chat, msgId) {
+async function listMenu(env, chat, msgId, which) {
   const st = await repoJson(env, "state/watches.json", { list: [] });
   const menu = await repoJson(env, "state/menu_data.json", { fixed: [] });
   const icon = { item: "🎯", brand: "🛍", etc: "📦" };
-  const lines = ["📋 <b>진행 중</b>"];
+  const title = { all: "📋 <b>진행 중</b>", clothes: "👕 <b>진행 중인 옷 추적</b>", etc: "📦 <b>진행 중인 기타 물건</b>" }[which];
+  const lines = [title];
   const rows = [];
-  (menu.fixed || []).forEach((f, i) => {
+  const showFixed = which !== "clothes";  // 기본 추적(스위치)은 기타 물건
+  const kinds = { all: ["item", "brand", "etc"], clothes: ["item", "brand"], etc: ["etc"] }[which];
+  (showFixed ? menu.fixed || [] : []).forEach((f, i) => {
     lines.push("• " + esc(f) + " (기본)");
     rows.push([[`⏹ ${f.slice(0, 20)} 중단`, "sf:" + i]]);
   });
-  for (const w of st.list || []) {
+  const list = (st.list || []).filter((w) => kinds.includes(w.kind));
+  for (const w of list) {
     lines.push(`• #${w.id} ${icon[w.kind] || ""} ${esc(w.title || w.query || "")}`);
     rows.push([[`⏹ #${w.id} 중단`, "s:" + w.id]]);
   }
-  if (!(st.list || []).length) lines.push("버튼으로 시작한 추적은 아직 없습니다.");
+  if (!list.length && !(showFixed && (menu.fixed || []).length)) lines.push("진행 중인 추적이 없습니다.");
   rows.push([["← 처음", "m"]]);
   return show(env, chat, msgId, lines.join("\n"), rows);
 }
