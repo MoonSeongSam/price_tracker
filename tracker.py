@@ -227,6 +227,12 @@ def track(cfg, keys):
             ok = [p for p in found if matches(p, item)]
             for p in ok:
                 p["bundle"] = is_bundle(p, item)
+            # 실행 기록용: 사이트별 개수만 (공개 기록이라 제목·동네는 안 찍음)
+            sites = {}
+            for p in found:
+                key = p["site"].split("·")[0]
+                sites[key] = sites.get(key, 0) + 1
+            print(f"수집 {sites}, 조건 통과 {len(ok)}건")
 
             # 가격 기록
             for label, cond in [("새상품", lambda p: p["site"].startswith("새상품")),
@@ -260,7 +266,8 @@ def track(cfg, keys):
                 print("조회 실패:", errors)
                 notify_errors(errors)
 
-    save_json(STATE / "alerted.json", alerted)
+    if TOKEN or DRY:  # 텔레그램 연결 전 시험 실행은 '알린 매물'로 기록하지 않음
+        save_json(STATE / "alerted.json", alerted)
 
 
 def notify_errors(errors):
