@@ -40,9 +40,10 @@ BASE_EXCLUDE = ["매입", "삽니다", "구합니다", "구매합니다", "구�
 def load_config():
     """비밀값 CONFIG_JSON(공개 저장소용) → 없으면 로컬 config.json."""
     raw = os.environ.get("CONFIG_JSON")
-    if raw:
-        return json.loads(raw)
-    return json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
+    cfg = json.loads(raw) if raw else json.loads((ROOT / "config.json").read_text(encoding="utf-8"))
+    off = set(load_json(STATE / "fixed_off.json", []))  # 메뉴에서 중단한 기본 추적
+    cfg["items"] = [i for i in cfg.get("items", []) if i["name"] not in off]
+    return cfg
 
 
 def load_json(path, default):
@@ -203,6 +204,13 @@ def handle_queue(cfg):
                 add_watch(dict(cmd["watch"]), cfg, brands)
             elif a == "stop":
                 stop_watch(int(cmd["id"]))
+            elif a == "stop_fixed":
+                off = load_json(STATE / "fixed_off.json", [])
+                if cmd["name"] not in off:
+                    off.append(cmd["name"])
+                save_json(STATE / "fixed_off.json", off)
+                cfg["items"] = [i for i in cfg["items"] if i["name"] != cmd["name"]]
+                send(f"⏹ {html.escape(cmd['name'])} 추적 중단")
             elif a == "search":
                 reply_search(cmd["q"], cfg)
             elif a == "add_brand":

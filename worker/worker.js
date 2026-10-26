@@ -223,6 +223,12 @@ async function onButton(env, chat, msgId, data) {
   }
   if (data === "go") return start(env, chat, msgId, conv);
   if (data === "l") return listMenu(env, chat, msgId);
+  if (data.startsWith("sf:")) {  // 기본 추적(스위치 등) 중단
+    const menu = await repoJson(env, "state/menu_data.json", { fixed: [] });
+    const name = (menu.fixed || [])[parseInt(data.slice(3), 10)];
+    if (name) await enqueue(env, { action: "stop_fixed", name });
+    return show(env, chat, msgId, `⏹ ${esc(name || "")} 중단 요청했습니다.`, [[["📋 목록", "l"], ["← 처음", "m"]]]);
+  }
   if (data.startsWith("s:")) {
     const id = parseInt(data.slice(2), 10);
     await enqueue(env, { action: "stop", id });
@@ -357,8 +363,11 @@ async function listMenu(env, chat, msgId) {
   const menu = await repoJson(env, "state/menu_data.json", { fixed: [] });
   const icon = { item: "🎯", brand: "🛍", etc: "📦" };
   const lines = ["📋 <b>진행 중</b>"];
-  for (const f of menu.fixed || []) lines.push("• " + esc(f) + " (기본)");
   const rows = [];
+  (menu.fixed || []).forEach((f, i) => {
+    lines.push("• " + esc(f) + " (기본)");
+    rows.push([[`⏹ ${f.slice(0, 20)} 중단`, "sf:" + i]]);
+  });
   for (const w of st.list || []) {
     lines.push(`• #${w.id} ${icon[w.kind] || ""} ${esc(w.title || w.query || "")}`);
     rows.push([[`⏹ #${w.id} 중단`, "s:" + w.id]]);
