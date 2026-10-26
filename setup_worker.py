@@ -39,17 +39,18 @@ def cf_get(path, token):
 
 for attempt in range(3):
     cf = ask("1) Cloudflare API 토큰 붙여넣기 + Enter (화면에 안 보임): ")
-    print(f"  입력된 글자 수: {len(cf)} (보통 40자 정도)")
-    v = cf_get("/user/tokens/verify", cf)
-    if v.get("success"):
-        accounts = cf_get("/accounts", cf).get("result") or []
-        if accounts:
-            print(f"  Cloudflare 계정 확인: {accounts[0]['name']}")
-            break
-        print("  토큰은 맞는데 계정을 못 읽습니다. 'Edit Cloudflare Workers' 템플릿으로 만들었는지, "
-              "Account Resources에 내 계정을 넣었는지 확인해 주세요.")
+    print(f"  입력된 글자 수: {len(cf)}")
+    # 계정 목록을 바로 읽어 봄 (사용자 토큰·계정 소유 토큰 둘 다 이 방법으로 확인됨)
+    res = cf_get("/accounts", cf)
+    accounts = res.get("result") or []
+    if res.get("success") and accounts:
+        print(f"  Cloudflare 계정 확인: {accounts[0]['name']}")
+        break
+    if res.get("success"):
+        print("  토큰은 맞는데 계정이 안 보입니다. 토큰을 만들 때 Account Resources에 "
+              "내 계정을 넣었는지 확인해 주세요.")
     else:
-        msg = "; ".join(e.get("message", "") for e in v.get("errors") or [])
+        msg = "; ".join(f"{e.get('code', '')} {e.get('message', '')}" for e in res.get("errors") or [])
         print(f"  ❌ Cloudflare가 토큰을 거절: {msg}")
         print("  → 'API Tokens' 화면에서 만든 토큰인지 확인해 주세요 (Global API Key·Origin CA Key 아님). "
               "붙여넣기는 마우스 오른쪽 클릭으로 해 보세요.")
