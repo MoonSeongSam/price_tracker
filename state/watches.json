@@ -1,27 +1,4 @@
 {
  "next_id": 3,
- "list": [
-  {
-   "kind": "etc",
-   "query": "n100 미니PC 8기가",
-   "max_price": 220000,
-   "cond": "a",
-   "exclude": [],
-   "include": [],
-   "id": 1,
-   "created": "2026-10-27T10:57:51.287388+09:00",
-   "title": "n100 미니PC 8기가 · 220,000원 이하"
-  },
-  {
-   "kind": "etc",
-   "query": "미니PC n100 16기가",
-   "max_price": 250000,
-   "cond": "a",
-   "exclude": [],
-   "include": [],
-   "id": 2,
-   "created": "2026-10-27T10:58:11.632044+09:00",
-   "title": "미니PC n100 16기가 · 250,000원 이하"
-  }
- ]
+ "list": []
 }
