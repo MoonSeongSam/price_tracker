@@ -1,4 +1,27 @@
 {
- "next_id": 3,
- "list": []
+ "next_id": 5,
+ "list": [
+  {
+   "kind": "etc",
+   "query": "애플 맥미니 M1",
+   "max_price": 300000,
+   "cond": "a",
+   "exclude": [],
+   "include": [],
+   "id": 3,
+   "created": "2026-10-30T10:23:20.533586+09:00",
+   "title": "애플 맥미니 M1 · 300,000원 이하"
+  },
+  {
+   "kind": "etc",
+   "query": "애플 맥미니 M2",
+   "max_price": 350000,
+   "cond": "a",
+   "exclude": [],
+   "include": [],
+   "id": 4,
+   "created": "2026-10-30T10:23:34.319265+09:00",
+   "title": "애플 맥미니 M2 · 350,000원 이하"
+  }
+ ]
 }
