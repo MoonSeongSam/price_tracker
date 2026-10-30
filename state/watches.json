@@ -1,5 +1,5 @@
 {
- "next_id": 5,
+ "next_id": 7,
  "list": [
   {
    "kind": "etc",
@@ -22,6 +22,28 @@
    "id": 4,
    "created": "2026-10-30T10:23:34.319265+09:00",
    "title": "애플 맥미니 M2 · 350,000원 이하"
+  },
+  {
+   "kind": "etc",
+   "query": "미니PC N100 8GB",
+   "max_price": 200000,
+   "cond": "a",
+   "exclude": [],
+   "include": [],
+   "id": 5,
+   "created": "2026-10-30T12:05:29.420011+09:00",
+   "title": "미니PC N100 8GB · 200,000원 이하"
+  },
+  {
+   "kind": "etc",
+   "query": "미니PC N100 16GB",
+   "max_price": 300000,
+   "cond": "a",
+   "exclude": [],
+   "include": [],
+   "id": 6,
+   "created": "2026-10-30T12:05:54.934723+09:00",
+   "title": "미니PC N100 16GB · 300,000원 이하"
   }
  ]
 }
